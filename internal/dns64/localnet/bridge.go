@@ -14,11 +14,15 @@ import (
 // das Heimnetz einen Port nur, wenn er auf dem Docker-Host veroeffentlicht ist (-p 53:53/udp), und Docker kann
 // Absender-Adressen durch die des Gateways ersetzen (Userland-Proxy, IPv6 ohne ip6tables, manche NAS-Systeme).
 
-// Bridge meldet, ob die Node in einem Container im Bridge-Netz laeuft: Container-Datei vorhanden und nur virtuelle
-// Schnittstellen (im Host-Netz sieht der Container die echten Netzwerkkarten des Hosts). Auch fuer andere Module
-// (PROXY64): das Paket importiert nichts aus internal/dns64.
+// Bridge meldet, ob die Node in einem Container im klassischen Docker-Bridge-Netz laeuft.
+// Macvlan und IPvlan haben eigene LAN-Adressen und benoetigen keine Host-Portfreigaben.
+// Auch fuer andere Module (PROXY64): das Paket importiert nichts aus internal/dns64.
 func Bridge() bool {
-	return inBridge(fileExists("/.dockerenv") || fileExists("/run/.containerenv"), readIfaces("/sys/class/net"))
+	container := fileExists("/.dockerenv") || fileExists("/run/.containerenv")
+	if !container {
+		return false
+	}
+	return inBridgeWithKinds(true, readIfaces("/sys/class/net"), interfaceKinds())
 }
 
 // Gateway: IPv4-Default-Gateway (im Bridge-Netz der Docker-Host, z. B. 172.17.0.1).
@@ -34,6 +38,10 @@ func Gateway() netip.Addr { return defaultGateway() }
 type iface struct{ index, link string }
 
 func inBridge(container bool, ifs map[string]iface) bool {
+	return inBridgeWithKinds(container, ifs, nil)
+}
+
+func inBridgeWithKinds(container bool, ifs map[string]iface, kinds map[string]string) bool {
 	if !container {
 		return false
 	}
@@ -41,6 +49,9 @@ func inBridge(container bool, ifs map[string]iface) bool {
 	for name, x := range ifs {
 		if name == "lo" {
 			continue
+		}
+		if kinds[name] == "ipvlan" || kinds[name] == "macvlan" {
+			return false // eigene LAN-Schnittstelle, keine Docker-Host-Portweiterleitung erforderlich
 		}
 		if name == "docker0" || x.index == x.link { // Host-Netz: echte Karte bzw. Docker-Bruecke des Hosts sichtbar
 			return false
